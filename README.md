@@ -4,7 +4,7 @@ A collection of tools for analyzing and visualizing match data from Star Wars Un
 
 ## Main Tool: `kabastCSVprocessing.py`
 
-This script processes match data exported from SWU-DB or Karabast (in CSV format) to generate comprehensive win rate reports and visualizations.
+This script processes match data exported from Karabast (in CSV format) to generate comprehensive win rate reports and visualizations.
 
 ### Features
 
