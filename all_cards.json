@@ -37376,7 +37376,7 @@
     "Set": "LAW",
     "Number": "002",
     "Name": "Tobias Beckett",
-    "Subtitle": null,
+    "Subtitle": "People are Predictable",
     "Type": "Leader",
     "Aspects": [
       "Command",
@@ -37426,7 +37426,7 @@
     "Set": "LAW",
     "Number": "004",
     "Name": "Aurra Sing",
-    "Subtitle": null,
+    "Subtitle": "Deadly Soloist",
     "Type": "Leader",
     "Aspects": [
       "Vigilance",
@@ -37451,7 +37451,7 @@
     "Set": "LAW",
     "Number": "005",
     "Name": "Jyn Erso",
-    "Subtitle": null,
+    "Subtitle": "Time to Fight",
     "Type": "Leader",
     "Aspects": [
       "Heroism",
@@ -37475,7 +37475,7 @@
     "Set": "LAW",
     "Number": "006",
     "Name": "Vel Sartha",
-    "Subtitle": null,
+    "Subtitle": "Founding the Rebellion",
     "Type": "Leader",
     "Aspects": [
       "Heroism",

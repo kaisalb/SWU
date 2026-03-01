@@ -228,9 +228,20 @@ for card in cards:
         aspects = card.get("Aspects", [])
         entry = {"aspects": sorted(aspects), "subtitle": subtitle}
         # Store by Name and also by "Name | Subtitle" to match CSV
-        leader_lookup[name] = entry
         if subtitle:
             leader_lookup[f"{name} | {subtitle}"] = entry
+            
+        # If multiple leaders have the same name, we might overwrite here
+        # but the specific "Name | Subtitle" key will still be unique.
+        # To handle cases where ONLY the name is provided, we should store a list of possibilities
+        # or just the most recent one. 
+        if name not in leader_lookup:
+            leader_lookup[name] = entry
+        else:
+            # If it's already there, and we have a new one with a subtitle, 
+            # we prefer the one that is likely more unique or we can just skip overwriting
+            # to avoid ambiguity. For now, let's keep the first one found or handle it.
+            pass
     elif card_type == "Base":
         # Bases have a single list of aspects, usually just one
         aspects = card.get("Aspects", [])
@@ -324,7 +335,7 @@ def generate_plots(data, output_dir, prefix="", highlighted=None):
     for i, (idx, row) in enumerate(aspect_stats.iterrows()):
         leader_aspects = aspect_map.get(row["LeaderAspectsStr"], [])
         color = get_aspect_color(leader_aspects)
-        hatch = get_hatch(leader_aspects)
+        hatch = get_hatch_robust(row)
         
         bar_x = i
         plt.bar(bar_x, row["WinRate"], color=color, hatch=hatch, edgecolor=SW_COLORS["Text"], 
@@ -401,7 +412,7 @@ def generate_plots(data, output_dir, prefix="", highlighted=None):
         else:
             color = SW_COLORS["Neutral"]
 
-        hatch = get_hatch(leader_aspects)
+        hatch = get_hatch_robust(row)
         
         bar_y = y_positions[i]
         plt.barh(bar_y, row["WinRate"], color=color, hatch=hatch, edgecolor=SW_COLORS["Text"], linewidth=1.5)
@@ -473,7 +484,7 @@ def generate_plots(data, output_dir, prefix="", highlighted=None):
         else:
             # Split bar logic
             l_aspects = leader_lookup.get(leader_name, {}).get("aspects", [])
-            hatch = get_hatch(l_aspects)
+            hatch = get_hatch_robust(row)
             
             # Get base aspect breakdown for this leader
             bases = leader_base_stats[leader_base_stats["LeaderNorm"] == leader_name].copy()
@@ -503,6 +514,7 @@ def generate_plots(data, output_dir, prefix="", highlighted=None):
             else:
                 # Fallback if no game data (shouldn't happen)
                 color = SW_COLORS["Highlight"] if leader_name in highlighted else get_aspect_color(l_aspects)
+                hatch = get_hatch_robust(row)
                 plt.barh(bar_y, row["WinRate"], color=color, hatch=hatch, edgecolor=SW_COLORS["Text"], linewidth=1.5)
         
         # Win rate text annotation
@@ -636,6 +648,18 @@ meta_list = load_meta_leaders()
 def combine_deck_aspects(row):
     leader_aspects = row["LeaderAspects"]
     base_aspect = row["BaseAspect"]
+    leader_norm = row["LeaderNorm"]
+    
+    if not isinstance(leader_aspects, list):
+        # Fallback for leaders not in lookup
+        # Attempt to find aspects if we have a name but the lookup failed
+        # because of subtitle mismatch in CSV vs card DB
+        if " | " in leader_norm:
+            base_name = leader_norm.split(" | ")[0].strip()
+            found_aspects = leader_lookup.get(base_name, {}).get("aspects")
+            if found_aspects:
+                leader_aspects = found_aspects
+                # We can't easily update the row here, but we can return the correct combined aspects
     
     if not isinstance(leader_aspects, list):
         # Even if leader aspects are unknown, we might have base aspect
@@ -652,6 +676,32 @@ def combine_deck_aspects(row):
     combined = list(set(combined))
     
     return ", ".join(sorted(combined))
+
+def get_hatch_robust(row):
+    # Try to get from LeaderAspects first
+    aspects = None
+    if "LeaderAspects" in row:
+        aspects = row["LeaderAspects"]
+    elif "LeaderAspectsStr" in row and isinstance(row["LeaderAspectsStr"], str):
+        # Fallback to splitting LeaderAspectsStr if it exists
+        aspects = [a.strip() for a in row["LeaderAspectsStr"].split(",") if a.strip()]
+        
+    if isinstance(aspects, list) and aspects:
+        return get_hatch(aspects)
+    
+    # Try finding aspects by base name if "Name | Subtitle" lookup failed
+    # or if we are looking at a row from an aggregated stats table
+    leader_norm = None
+    if "LeaderNorm" in row:
+        leader_norm = row["LeaderNorm"]
+    
+    if leader_norm and " | " in leader_norm:
+        base_name = leader_norm.split(" | ")[0].strip()
+        found_aspects = leader_lookup.get(base_name, {}).get("aspects")
+        if found_aspects:
+            return get_hatch(found_aspects)
+            
+    return ""
 
 df["LeaderAspectsStr"] = df["LeaderAspects"].apply(lambda x: ", ".join(x) if isinstance(x, list) else "Unknown")
 df["DeckAspects"] = df.apply(combine_deck_aspects, axis=1)
