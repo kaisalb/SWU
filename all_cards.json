@@ -37355,8 +37355,7 @@
     "Type": "Leader",
     "Aspects": [
       "Aggression",
-      "Command",
-      "Heroism"
+      "Command"
     ],
     "Traits": [
       "REBEL"
@@ -37380,8 +37379,7 @@
     "Type": "Leader",
     "Aspects": [
       "Command",
-      "Cunning",
-      "Villainy"
+      "Cunning"
     ],
     "Traits": [
       "UNDERWORLD"
