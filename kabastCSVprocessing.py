@@ -11,29 +11,44 @@ import os
 # --- STYLING ---
 # Star Wars inspired colors (from SWU aspects and general themes)
 SW_COLORS = {
-    "Vigilance": "#2c5da0",   # Blue
-    "Command": "#3d7d44",     # Green
-    "Aggression": "#b02a2a",  # Red
-    "Cunning": "#cc9900",     # Yellow/Gold
-    "Heroism": "#e0e0e0",     # White/Light Gray
-    "Villainy": "#1a1a1a",    # Black/Dark Gray
-    "Neutral": "#808080",     # Gray
-    "Highlight": "#ff00ff",   # Magenta for highlights
-    "Background": "#1a1a1a",  # Deep Space Black
-    "Text": "#FFD700",        # Gold
-    "Grid": "#404040"         # Dark Gray
+    "Vigilance": "blue",
+    "Command": "green",
+    "Aggression": "red",
+    "Cunning": "yellow",
+    "Heroism": "white",
+    "Villainy": "black",
+    "Neutral": "#808080",
+    "Highlight": "#ff00ff",
+    "Background": "#1a1a1a",
+    "Text": "#FFD700",
+    "Grid": "#404040"
 }
 
-# HATCH PATTERNS for aspects
+# HATCH PATTERNS for aspects logic
+# Heroism: Slashes down to the right (\)
+# Villainy: Slashes down to the left (/)
+# No Heroism/Villainy: Vertical lines (|)
 ASPECT_HATCH = {
-    "Vigilance": "//",
-    "Command": "\\\\",
-    "Aggression": "xx",
-    "Cunning": "..",
-    "Heroism": "++",
-    "Villainy": "--",
-    "Neutral": ""
+    "Heroism": "\\",
+    "Villainy": "/",
+    "Neutral": "|"
 }
+
+def get_hatch(aspects):
+    if not aspects or not isinstance(aspects, list):
+        return ""
+    
+    # Heroism and Villany should continue to drive the hatch direction, 
+    # note that this is currently only sourced from the leader aspects.
+    # Convert to strings and handle potential case issues
+    aspect_list = [str(a).strip().title() for a in aspects]
+    
+    if "Heroism" in aspect_list:
+        return ASPECT_HATCH["Heroism"]
+    elif "Villainy" in aspect_list:
+        return ASPECT_HATCH["Villainy"]
+    else:
+        return ASPECT_HATCH["Neutral"]
 
 # Set aesthetic parameters
 plt.rcParams['figure.facecolor'] = SW_COLORS["Background"]
@@ -61,15 +76,12 @@ def get_aspect_color(aspects):
     
     # Priority for coloring: Aggression, Command, Cunning, Vigilance
     # Then alignment Heroism/Villainy
-    primaries = [a.strip() for a in aspects if a.strip() in ["Aggression", "Command", "Cunning", "Vigilance"]]
-    alignments = [a.strip() for a in aspects if a.strip() in ["Heroism", "Villainy"]]
+    aspect_list = [str(a).strip().title() for a in aspects]
+    primaries = [a for a in aspect_list if a in ["Aggression", "Command", "Cunning", "Vigilance"]]
+    alignments = [a for a in aspect_list if a in ["Heroism", "Villainy"]]
     
     if primaries:
         base_color = SW_COLORS.get(primaries[0], SW_COLORS["Neutral"])
-        # If there's an alignment, we could potentially adjust the shade, 
-        # but for now let's just use the primary.
-        # However, to be "nuanced", if it's Villainy, we might want it darker?
-        # Actually, let's keep it simple and recognizable by primary.
         return base_color
     
     if alignments:
@@ -236,10 +248,10 @@ base_map = {
     "30hp-aggression-base": "Aggression Base",
     "30hp-vigilance-base": "Vigilance Base",
     "30hp-command-base": "Command Base",
-    "28hp-cunning-force-base": "Force Base",
-    "28hp-aggression-force-base": "Force Base",
-    "28hp-vigilance-force-base": "Force Base",
-    "28hp-command-force-base": "Force Base",
+    "28hp-cunning-force-base": "Cunning Base",
+    "28hp-aggression-force-base": "Aggression Base",
+    "28hp-vigilance-force-base": "Vigilance Base",
+    "28hp-command-force-base": "Command Base",
     # Common SWU-DB export names
     "Aggression Base": "Aggression Base",
     "Cunning Base": "Cunning Base",
@@ -298,41 +310,37 @@ def generate_plots(data, output_dir, prefix="", highlighted=None):
         return stats
 
     # 1. Win Rate by Leader Aspect Combination
-    aspect_stats = get_stats_local(data, "LeaderAspectsStr")
+    # We must not group by 'LeaderAspects' because it contains unhashable lists.
+    # Instead, we'll group by the string and map the aspects back for plotting.
+    aspect_stats = get_stats_local(data, ["LeaderAspectsStr"])
     aspect_stats = aspect_stats.sort_values("WinRate", ascending=False)
+    
+    # Mapping back aspects for coloring
+    aspect_map = data.drop_duplicates("LeaderAspectsStr").set_index("LeaderAspectsStr")["LeaderAspects"].to_dict()
+    
     plt.figure(figsize=(12, 7))
-    aspect_stats["Color"] = aspect_stats["LeaderAspectsStr"].apply(lambda x: get_aspect_color(x.split(", ")))
     
-    # We use barplot but will apply hatches manually for consistency
-    bars = sns.barplot(data=aspect_stats, 
-                x="LeaderAspectsStr", y="WinRate", hue="LeaderAspectsStr", palette=dict(zip(aspect_stats["LeaderAspectsStr"], aspect_stats["Color"])), legend=True)
-    
-    # Apply hatches to the first plot as well
-    # bars.patches contains all the bars. We need to match them to the data.
-    for i, p in enumerate(bars.patches):
-        if i < len(aspect_stats):
-            row = aspect_stats.iloc[i]
-            aspects = row["LeaderAspectsStr"].split(", ")
-            # Priority for hatch: Aggression, Command, Cunning, Vigilance, then alignment
-            primaries = [a.strip() for a in aspects if a.strip() in ["Aggression", "Command", "Cunning", "Vigilance"]]
-            alignments = [a.strip() for a in aspects if a.strip() in ["Heroism", "Villainy"]]
-            hatch_aspect = primaries[0] if primaries else (alignments[0] if alignments else "Neutral")
-            hatch = ASPECT_HATCH.get(hatch_aspect, "")
-            p.set_hatch(hatch)
-            p.set_edgecolor(SW_COLORS["Text"])
-            p.set_linewidth(1)
-
-    # Add text labels on top of bars
-    for i, p in enumerate(bars.patches):
-        height = p.get_height()
-        bars.annotate(f'{height:.1f}%', 
-                    (p.get_x() + p.get_width() / 2., height), 
-                    ha='center', va='center', 
-                    xytext=(0, 10), 
+    # Using plt.bar for more direct control over hatches and colors
+    for i, (idx, row) in enumerate(aspect_stats.iterrows()):
+        leader_aspects = aspect_map.get(row["LeaderAspectsStr"], [])
+        color = get_aspect_color(leader_aspects)
+        hatch = get_hatch(leader_aspects)
+        
+        bar_x = i
+        plt.bar(bar_x, row["WinRate"], color=color, hatch=hatch, edgecolor=SW_COLORS["Text"], 
+                linewidth=1.5, label=row["LeaderAspectsStr"])
+        
+        # Add text labels on top of bars
+        plt.annotate(f'{row["WinRate"]:.1f}%', 
+                    (bar_x, row["WinRate"]), 
+                    ha='center', va='bottom', 
+                    xytext=(0, 5), 
                     textcoords='offset points',
                     color=SW_COLORS["Text"],
                     fontweight='bold',
                     fontsize=10)
+
+    plt.xticks(range(len(aspect_stats)), aspect_stats["LeaderAspectsStr"], rotation=45, ha='right')
 
     plt.title(f"{prefix}Win Rate by Opponent Leader Aspects (%)")
     plt.xticks(rotation=45, ha='right')
@@ -344,61 +352,74 @@ def generate_plots(data, output_dir, prefix="", highlighted=None):
     plt.savefig(os.path.join(output_dir, "win_rate_by_leader_aspect.png"), dpi=300)
     plt.close()
 
-    # 1b. Win Rate by Leader grouped by Aspect Pairing
-    # Show win rate by leader, with them instead grouped positionally by the aspect pairings. 
-    # The bar colors should be diagonal slashes of the aspect colors
-    deck_stats = get_stats_local(data, ["LeaderAspectsStr", "LeaderNorm"])
-    # If it's a Meta report, we might want to prioritize those specific leaders
-    # But generally we group by Aspect pairing, then by WinRate within that pairing.
-    deck_stats = deck_stats.sort_values(["LeaderAspectsStr", "WinRate"], ascending=[True, False])
+    # 1c. Win Rate by Deck Aspect Combination (Leader + Base)
+    # Grouping by DeckAspects and LeaderNorm as requested
+    # We remove LeaderAspects from groupby because it's a list (unhashable)
+    deck_leader_stats = get_stats_local(data, ["DeckAspects", "LeaderNorm", "BaseAspect"])
+    deck_leader_stats = deck_leader_stats.sort_values(["DeckAspects", "WinRate"], ascending=[True, True])
     
-    plt.figure(figsize=(14, 10))
-    # We'll use a standard bar plot but manually apply hatches
-    unique_aspect_pairs = deck_stats["LeaderAspectsStr"].unique()
+    # Mapping back leader aspects for coloring
+    leader_aspect_map = data.drop_duplicates("LeaderNorm").set_index("LeaderNorm")["LeaderAspects"].to_dict()
+
+    plt.figure(figsize=(16, 12))
+    y_positions = []
+    current_y = 0
+    last_deck_aspect = None
+    tick_positions = []
+    tick_labels = []
     
-    # Calculate x positions with extra spacing between aspect pairs
-    x_positions = []
-    current_x = 0
-    last_aspect = None
-    
-    for i, row in deck_stats.iterrows():
-        if last_aspect is not None and row["LeaderAspectsStr"] != last_aspect:
-            current_x += 1.5 # Extra gap between groups
+    for i, row in deck_leader_stats.iterrows():
+        if last_deck_aspect is not None and row["DeckAspects"] != last_deck_aspect:
+            current_y += 1.5
         else:
-            current_x += 1.0
-        x_positions.append(current_x)
-        last_aspect = row["LeaderAspectsStr"]
+            current_y += 1.0
+        y_positions.append(current_y)
+        last_deck_aspect = row["DeckAspects"]
 
-    for i, (idx, row) in enumerate(deck_stats.iterrows()):
-        aspects = row["LeaderAspectsStr"].split(", ")
-        color = get_aspect_color(aspects)
-        # Find primary aspect for hatch
-        primaries = [a.strip() for a in aspects if a.strip() in ["Aggression", "Command", "Cunning", "Vigilance"]]
-        alignments = [a.strip() for a in aspects if a.strip() in ["Heroism", "Villainy"]]
-        hatch_aspect = primaries[0] if primaries else (alignments[0] if alignments else "Neutral")
-        hatch = ASPECT_HATCH.get(hatch_aspect, "")
+    for i, (idx, row) in enumerate(deck_leader_stats.iterrows()):
+        leader_norm = row["LeaderNorm"]
+        leader_aspects = leader_aspect_map.get(leader_norm, [])
+        base_aspect = row["BaseAspect"]
         
-        bar_x = x_positions[i]
-        plt.bar(bar_x, row["WinRate"], color=color, hatch=hatch, edgecolor=SW_COLORS["Text"], linewidth=1)
+        # Logic for alternating colors:
+        # 1. Leader aspect color(s)
+        # 2. Base aspect color
+        all_primaries = []
+        if isinstance(leader_aspects, list):
+            all_primaries.extend([a for a in leader_aspects if a in ["Aggression", "Command", "Cunning", "Vigilance"]])
+        if base_aspect and base_aspect in ["Aggression", "Command", "Cunning", "Vigilance"]:
+            if base_aspect not in all_primaries:
+                all_primaries.append(base_aspect)
         
-        # Add vertical text labels inside bars (centered)
-        text_y = row["WinRate"] / 2
-        plt.text(bar_x, text_y, f'{row["WinRate"]:.1f}%', 
-                 ha='center', va='center', color=SW_COLORS["Text"], fontweight='bold', 
-                 fontsize=10, rotation=90)
+        # Calculate color based on index i and all available primary aspects
+        # The user says "The colors should alternate between the leaders aspect color(s), and the base aspect color."
+        # This implementation ensures that for each bar, we cycle through the aspects available for THAT deck.
+        # Since each bar represents ONE deck, and we have many bars, 
+        # using 'i % len(all_primaries)' makes the color depend on the bar's position and the number of aspects.
+        if all_primaries:
+            color = SW_COLORS.get(all_primaries[i % len(all_primaries)], SW_COLORS["Neutral"])
+        else:
+            color = SW_COLORS["Neutral"]
 
-    plt.xticks(x_positions, deck_stats["LeaderNorm"], rotation=45, ha='right')
-    plt.title(f"{prefix}Win Rate by Leader (%) (Grouped by Aspect Pairings)")
-    plt.ylabel("Win Rate (%)")
-    plt.ylim(0, 105)
-    plt.axhline(50, color=SW_COLORS["Grid"], linestyle='--', alpha=0.5)
-    
-    # Custom legend for aspects
-    from matplotlib.patches import Patch
-    legend_elements = [Patch(facecolor=get_aspect_color([a]), hatch=ASPECT_HATCH.get(a, ""), 
-                             edgecolor=SW_COLORS["Text"], label=a) for a in ASPECT_HATCH if a != "Neutral" and a != "Background" and a != "Text" and a != "Grid"]
-    plt.legend(handles=legend_elements, bbox_to_anchor=(1.05, 1), loc='upper left', title="Aspect Patterns")
-    
+        hatch = get_hatch(leader_aspects)
+        
+        bar_y = y_positions[i]
+        plt.barh(bar_y, row["WinRate"], color=color, hatch=hatch, edgecolor=SW_COLORS["Text"], linewidth=1.5)
+        
+        # Add horizontal text labels next to bars
+        plt.text(row["WinRate"] + 1, bar_y, f'{row["WinRate"]:.1f}%', 
+                 ha='left', va='center', color=SW_COLORS["Text"], fontweight='bold', 
+                 fontsize=10)
+        
+        tick_positions.append(bar_y)
+        # Label is Leader + Deck Aspects (shorthand if possible or just leader)
+        tick_labels.append(f"{row['LeaderNorm']} ({row['DeckAspects']})")
+
+    plt.title(f"{prefix}Win Rate by Leader & Deck Aspect Combination (%)")
+    plt.yticks(tick_positions, tick_labels, fontsize=10)
+    plt.xlabel("Win Rate (%)")
+    plt.xlim(0, 115)
+    plt.axvline(50, color=SW_COLORS["Grid"], linestyle='--', alpha=0.5)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "win_rate_by_deck_aspect.png"), dpi=300)
     plt.close()
@@ -406,17 +427,16 @@ def generate_plots(data, output_dir, prefix="", highlighted=None):
     # 2. Top Opponent Leaders (prioritize most games played)
     leader_stats_full = get_stats_local(data, "LeaderNorm")
     
+    # To handle split colors by base aspect, we need stats by (Leader, BaseAspect)
+    leader_base_stats = get_stats_local(data, ["LeaderNorm", "BaseAspect"])
+    
     # Identify truncation and add 'Other' category
     if len(leader_stats_full) > 20:
-        # Sort by TotalGames first to identify top 19 (save one spot for Other)
-        # Actually user said truncate to top 20, usually that means 20 entries total including Other? 
-        # Or 20 specific entries + Other? 
-        # "When truncating data to top 20, include a data series that is an aggregat of all other data"
-        # I'll keep the top 19 and add 1 'Other' = 20 total.
         leader_stats_sorted = leader_stats_full.sort_values(["TotalGames", "WinRate"], ascending=[False, False])
         leader_stats = leader_stats_sorted.head(19).copy()
-        other_data = leader_stats_sorted.iloc[19:]
+        top_leaders = leader_stats["LeaderNorm"].tolist()
         
+        other_data = leader_stats_sorted.iloc[19:]
         other_row = pd.DataFrame({
             "LeaderNorm": ["Other"],
             "Wins": [other_data["Wins"].sum()],
@@ -427,10 +447,10 @@ def generate_plots(data, output_dir, prefix="", highlighted=None):
         other_row["WinRate"] = (other_row["Wins"] / other_row["TotalGames"].apply(lambda x: max(x, 1))) * 100
         leader_stats = pd.concat([leader_stats, other_row], ignore_index=True)
     else:
-        # Sort by TotalGames first, then WinRate
         leader_stats = leader_stats_full.sort_values(["TotalGames", "WinRate"], ascending=[False, False])
+        top_leaders = leader_stats["LeaderNorm"].tolist()
     
-    # Enrich labels with aspects for nuance
+    # Enrich labels
     def get_enriched_label(l):
         if l == "Other":
             count = leader_stats[leader_stats["LeaderNorm"] == "Other"]["Entries"].iloc[0]
@@ -444,20 +464,57 @@ def generate_plots(data, output_dir, prefix="", highlighted=None):
     leader_stats["EnrichedLabel"] = leader_stats["LeaderNorm"].apply(get_enriched_label)
     
     plt.figure(figsize=(14, 10))
-    colors = [SW_COLORS["Highlight"] if l in highlighted else get_aspect_color(leader_lookup.get(l, {}).get("aspects")) for l in leader_stats["LeaderNorm"]]
-    bars = sns.barplot(data=leader_stats, x="WinRate", y="EnrichedLabel", hue="EnrichedLabel", palette=dict(zip(leader_stats["EnrichedLabel"], colors)), legend=False)
-    
-    # Add text labels on the bars
-    for i, p in enumerate(bars.patches):
-        width = p.get_width()
-        # Avoid redundant 0% labels if any
-        label = f'{width:.1f}%'
-        bars.annotate(label, 
-                    (width + 1.5, p.get_y() + p.get_height() / 2.), 
+    for i, (idx, row) in enumerate(leader_stats.iterrows()):
+        leader_name = row["LeaderNorm"]
+        bar_y = i
+        
+        if leader_name == "Other":
+            plt.barh(bar_y, row["WinRate"], color=SW_COLORS["Neutral"], edgecolor=SW_COLORS["Text"], linewidth=1.5)
+        else:
+            # Split bar logic
+            l_aspects = leader_lookup.get(leader_name, {}).get("aspects", [])
+            hatch = get_hatch(l_aspects)
+            
+            # Get base aspect breakdown for this leader
+            bases = leader_base_stats[leader_base_stats["LeaderNorm"] == leader_name].copy()
+            total_l_games = bases["TotalGames"].sum()
+            
+            if total_l_games > 0:
+                left = 0
+                # Sort bases to have consistent coloring order if possible
+                bases = bases.sort_values("BaseAspect")
+                for _, b_row in bases.iterrows():
+                    b_aspect = b_row["BaseAspect"]
+                    b_games = b_row["TotalGames"]
+                    # Percentage of this leader's games that were with this base aspect
+                    share = b_games / total_l_games
+                    # Width of this segment in the bar (share of the win rate)
+                    width = row["WinRate"] * share
+                    
+                    # Color selection: use BaseAspect color if valid, otherwise fallback to highlight/leader color
+                    if leader_name in highlighted:
+                        color = SW_COLORS["Highlight"]
+                    else:
+                        color = SW_COLORS.get(b_aspect, get_aspect_color(l_aspects))
+                    
+                    plt.barh(bar_y, width, left=left, color=color, hatch=hatch, 
+                             edgecolor=SW_COLORS["Text"], linewidth=1.5)
+                    left += width
+            else:
+                # Fallback if no game data (shouldn't happen)
+                color = SW_COLORS["Highlight"] if leader_name in highlighted else get_aspect_color(l_aspects)
+                plt.barh(bar_y, row["WinRate"], color=color, hatch=hatch, edgecolor=SW_COLORS["Text"], linewidth=1.5)
+        
+        # Win rate text annotation
+        plt.annotate(f'{row["WinRate"]:.1f}%', 
+                    (row["WinRate"] + 1.5, bar_y), 
                     ha='left', va='center', 
                     color=SW_COLORS["Text"],
                     fontweight='bold',
                     fontsize=10)
+
+    plt.yticks(range(len(leader_stats)), leader_stats["EnrichedLabel"])
+    plt.gca().invert_yaxis() # Top leaders first
 
     plt.title(f"{prefix}Top 20 Opponent Leaders (by Games Played)")
     if highlighted:
@@ -581,12 +638,18 @@ def combine_deck_aspects(row):
     base_aspect = row["BaseAspect"]
     
     if not isinstance(leader_aspects, list):
+        # Even if leader aspects are unknown, we might have base aspect
+        if base_aspect and pd.notna(base_aspect):
+            return str(base_aspect)
         return "Unknown"
     
     # Ensure all elements are strings to avoid TypeError in sorted()
     combined = [str(a) for a in leader_aspects if a is not None]
     if base_aspect and pd.notna(base_aspect):
         combined.append(str(base_aspect))
+    
+    # Remove duplicates if any (e.g. Heroism on both leader and base)
+    combined = list(set(combined))
     
     return ", ".join(sorted(combined))
 
