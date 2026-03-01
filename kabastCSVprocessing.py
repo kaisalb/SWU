@@ -10,6 +10,10 @@ import os
 
 import unicodedata
 
+# --- GLOBAL LOOKUPS ---
+leader_lookup = {}
+base_lookup = {}
+
 def strip_accents(s):
     return ''.join(c for c in unicodedata.normalize('NFD', s)
                   if unicodedata.category(c) != 'Mn')
@@ -103,6 +107,29 @@ def format_aspects(aspect_list):
     
     return ", ".join(sorted_list)
 
+def get_leader_sort_info(name):
+    """
+    Returns sorting information for a leader based on set rank, alignment rank, and aspect rank.
+    """
+    data = get_leader_data(name)
+    l_set = data.get("set", "Unknown")
+    l_aspects = data.get("aspects", [])
+    
+    set_rank = SET_ORDER.get(l_set, 99)
+    
+    # Leader aspect (Heroism --> Villainy)
+    alignment_priority = {"Heroism": 0, "Villainy": 1}
+    alignments = [alignment_priority[a] for a in l_aspects if a in alignment_priority]
+    alignment_rank = min(alignments) if alignments else 2
+    
+    # Leader Aspect color (Cunning --> Aggression --> Command --> Vigilance)
+    aspect_priority = {"Cunning": 0, "Aggression": 1, "Command": 2, "Vigilance": 3}
+    # Find the highest priority primary aspect
+    primaries = [aspect_priority[a] for a in l_aspects if a in aspect_priority]
+    aspect_rank = min(primaries) if primaries else 4
+    
+    return pd.Series([set_rank, alignment_rank, aspect_rank])
+
 # Disclaimer for Star Wars property
 DISCLAIMER_TEXT = ("Output is in no way affiliated with Disney or Fantasy Flight Games. "
                    "Star Wars characters, cards, logos, and art are property of Disney and/or Fantasy Flight Games.")
@@ -133,8 +160,8 @@ def get_hatch(aspects):
     if not aspects or not isinstance(aspects, list):
         return ""
     
-    # Heroism and Villany should continue to drive the hatch direction, 
-    # note that this is currently only sourced from the leader aspects.
+    # Heroism and Villany drive the hatch direction. 
+    # Currently sourced from the leader aspects.
     # Convert to strings and handle potential case issues
     aspect_list = [str(a).strip().title() for a in aspects]
     
@@ -192,7 +219,7 @@ def get_aspect_color(aspects, use_text_colors=False):
     palette = TEXT_ASPECT_COLORS if use_text_colors else SW_COLORS
     
     if primaries:
-        # User requested to remove color blending. Use the highest-priority primary aspect.
+        # Use the highest-priority primary aspect for coloring.
         return palette.get(primaries[0], palette["Neutral"])
     
     if alignments:
@@ -206,7 +233,32 @@ root.withdraw()
 root.configure(bg=SW_COLORS["Background"])
 root.attributes("-topmost", True)
 
-# --- GUI TOOLS ---
+def normalize_leader(name):
+    # Some exports might use pipes, like "Darth Vader | Unstoppable"
+    return name.strip()
+
+base_map = {
+    "30hp-cunning-base": "Cunning Base",
+    "30hp-aggression-base": "Aggression Base",
+    "30hp-vigilance-base": "Vigilance Base",
+    "30hp-command-base": "Command Base",
+    "28hp-cunning-force-base": "Cunning Base",
+    "28hp-aggression-force-base": "Aggression Base",
+    "28hp-vigilance-force-base": "Vigilance Base",
+    "28hp-command-force-base": "Command Base",
+    # Common SWU-DB export names
+    "Aggression Base": "Aggression Base",
+    "Cunning Base": "Cunning Base",
+    "Vigilance Base": "Vigilance Base",
+    "Command Base": "Command Base",
+}
+
+def normalize_base(name):
+    if not name or not isinstance(name, str):
+        return name
+    return base_map.get(name, name.strip())
+
+# --- DATA PROCESSING HELPERS ---
 def multi_select_listbox(title, prompt, options, initial_selections=None):
     if initial_selections is None:
         initial_selections = []
@@ -216,11 +268,9 @@ def multi_select_listbox(title, prompt, options, initial_selections=None):
     win.configure(bg=SW_COLORS["Background"])
     win.attributes("-topmost", True)
     
-    # We'll use a local loop to handle the window instead of just wait_window
-    # to be more certain about event handling.
-    # Also we'll deiconify root briefly if it's withdrawn to help some OS.
-    # Actually let's try root.deiconify() for the duration of the dialog.
-    # But user wanted it hidden. Let's try root.update_idletasks() first.
+    # Use a local loop to handle the window instead of wait_window
+    # to ensure event handling.
+    # root.update_idletasks() ensures correct window state.
     root.update_idletasks()
     
     label = tk.Label(win, text=prompt, pady=10, bg=SW_COLORS["Background"], fg=SW_COLORS["Text"], font=("sans-serif", 10, "bold"))
@@ -282,143 +332,6 @@ def multi_select_listbox(title, prompt, options, initial_selections=None):
     
     return selection_state["result"]
 
-# --- DATA PROCESSING ---
-selected_files = filedialog.askopenfilenames(
-    title="Select one or more CSV files you want to process and aggregate",
-    filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-    initialdir="."
-)
-root.attributes("-topmost", False)
-
-if not selected_files:
-    print("No files selected. Exiting.")
-    exit()
-
-# Load and aggregate match results
-dataframes = []
-for file_path in selected_files:
-    try:
-        temp_df = pd.read_csv(file_path)
-        dataframes.append(temp_df)
-    except Exception as e:
-        print(f"Error loading {file_path}: {e}")
-
-if not dataframes:
-    print("No valid data found in selected files. Exiting.")
-    exit()
-
-df = pd.concat(dataframes, ignore_index=True)
-
-# Determine output directory name based on selected files
-if len(selected_files) == 1:
-    filename_stem = Path(selected_files[0]).stem
-else:
-    filename_stem = f"Aggregated_{len(selected_files)}_files_{Path(selected_files[0]).stem}"
-
-# Load card metadata
-# The user's code tried cards.json then all_cards.json. 
-# We'll check all_cards.json first as it's known to exist.
-cards_file = "all_cards.json" if os.path.exists("all_cards.json") else "cards.json"
-if not os.path.exists(cards_file):
-    print(f"Error: Card metadata file {cards_file} not found.")
-    exit()
-
-with open(cards_file, "r", encoding="utf-8") as f:
-    cards = json.load(f)
-
-leader_lookup = {}
-base_lookup = {}
-
-for card in cards:
-    # Use standard SWU-DB field names: "Name", "Type", "Aspects"
-    name = card.get("Name")
-    subtitle = card.get("Subtitle")
-    card_type = card.get("Type")
-    if card_type == "Leader":
-        # Aspects are usually a list, e.g., ["Vigilance", "Villainy"]
-        aspects = card.get("Aspects", [])
-        entry = {
-            "aspects": sorted(aspects), 
-            "subtitle": subtitle,
-            "set": card.get("Set"),
-            "number": card.get("Number")
-        }
-        # Store by Name and also by "Name | Subtitle" to match CSV
-        if subtitle:
-            # Case-insensitive keys for robust lookup
-            leader_lookup[f"{name} | {subtitle}".lower()] = entry
-            leader_lookup[strip_accents(f"{name} | {subtitle}".lower())] = entry
-            
-        # If multiple leaders have the same name, we might overwrite here
-        # but the specific "Name | Subtitle" key will still be unique.
-        if name.lower() not in leader_lookup:
-            leader_lookup[name.lower()] = entry
-        
-        name_stripped = strip_accents(name.lower())
-        if name_stripped not in leader_lookup:
-            leader_lookup[name_stripped] = entry
-    elif card_type == "Base":
-        # Bases have a single list of aspects, usually just one
-        aspects = card.get("Aspects", [])
-        base_lookup[name] = {
-            "aspect": aspects[0] if aspects else None,
-            "hp": card.get("HP", None)
-        }
-
-def normalize_leader(name):
-    # Some exports might use pipes, like "Darth Vader | Unstoppable"
-    return name.strip()
-
-base_map = {
-    "30hp-cunning-base": "Cunning Base",
-    "30hp-aggression-base": "Aggression Base",
-    "30hp-vigilance-base": "Vigilance Base",
-    "30hp-command-base": "Command Base",
-    "28hp-cunning-force-base": "Cunning Base",
-    "28hp-aggression-force-base": "Aggression Base",
-    "28hp-vigilance-force-base": "Vigilance Base",
-    "28hp-command-force-base": "Command Base",
-    # Common SWU-DB export names
-    "Aggression Base": "Aggression Base",
-    "Cunning Base": "Cunning Base",
-    "Vigilance Base": "Vigilance Base",
-    "Command Base": "Command Base",
-}
-
-def normalize_base(name):
-    if not name or not isinstance(name, str):
-        return name
-    return base_map.get(name, name.strip())
-
-df["LeaderNorm"] = df["OpponentLeader"].apply(normalize_leader)
-df["BaseNorm"] = df["OpponentBase"].apply(normalize_base)
-
-# Map aspects and HP from lookup tables
-df["LeaderAspects"] = df["LeaderNorm"].apply(lambda x: get_leader_data(x).get("aspects"))
-df["LeaderSubtitle"] = df["LeaderNorm"].apply(lambda x: get_leader_data(x).get("subtitle"))
-df["LeaderSet"] = df["LeaderNorm"].apply(lambda x: get_leader_data(x).get("set"))
-df["LeaderNumber"] = df["LeaderNorm"].apply(lambda x: get_leader_data(x).get("number"))
-
-def get_base_aspect(name):
-    # Try official lookup
-    aspect = base_lookup.get(name, {}).get("aspect")
-    if aspect:
-        return aspect
-    # Heuristic based on name
-    name_lower = name.lower()
-    if "aggression" in name_lower: return "Aggression"
-    if "cunning" in name_lower: return "Cunning"
-    if "vigilance" in name_lower: return "Vigilance"
-    if "command" in name_lower: return "Command"
-    return None
-
-df["BaseAspect"] = df["BaseNorm"].apply(get_base_aspect)
-df["BaseHP"] = df["BaseNorm"].apply(lambda x: base_lookup.get(x, {}).get("hp"))
-
-# Ensure Wins and Losses are numeric
-df["Wins"] = pd.to_numeric(df["Wins"], errors='coerce').fillna(0)
-df["Losses"] = pd.to_numeric(df["Losses"], errors='coerce').fillna(0)
-
 # --- PLOTTING FUNCTIONS ---
 def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=None):
     if highlighted is None:
@@ -443,7 +356,7 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
 
     # 1. Win Rate by Leader Aspect Combination
     # We must not group by 'LeaderAspects' because it contains unhashable lists.
-    # Instead, we'll group by the string and map the aspects back for plotting.
+    # Instead, group by the string and map the aspects back for plotting.
     aspect_stats = get_stats_local(data, ["LeaderAspectsStr"])
     aspect_stats = aspect_stats.sort_values("WinRate", ascending=False)
     
@@ -505,7 +418,7 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
     plt.close()
 
     # 1c. Win Rate by Deck Aspect Combination (Leader + Base)
-    # Grouping by Leader and Base Aspect as requested
+    # Grouping by Leader and Base Aspect
     deck_leader_stats_full = get_stats_local(data, ["LeaderNorm", "BaseAspect"])
     
     # Custom sorting for BaseAspect
@@ -522,26 +435,6 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
     leader_order_df = pd.DataFrame({"LeaderNorm": top_10_names})
     
     # Enrich with sorting keys for leaders
-    def get_leader_sort_info(name):
-        data = get_leader_data(name)
-        l_set = data.get("set", "Unknown")
-        l_aspects = data.get("aspects", [])
-        
-        set_rank = SET_ORDER.get(l_set, 99)
-        
-        # Leader aspect (Heroism --> Villainy)
-        alignment_priority = {"Heroism": 0, "Villainy": 1}
-        alignments = [alignment_priority[a] for a in l_aspects if a in alignment_priority]
-        alignment_rank = min(alignments) if alignments else 2
-        
-        # Leader Aspect color (Cunning --> Aggression --> Command --> Vigilance)
-        aspect_priority = {"Cunning": 0, "Aggression": 1, "Command": 2, "Vigilance": 3}
-        # Find the highest priority primary aspect
-        primaries = [aspect_priority[a] for a in l_aspects if a in aspect_priority]
-        aspect_rank = min(primaries) if primaries else 4
-        
-        return pd.Series([set_rank, alignment_rank, aspect_rank])
-
     leader_order_df[["SetRank", "AlignmentRank", "AspectRank"]] = leader_order_df["LeaderNorm"].apply(get_leader_sort_info)
     
     # Final sorting of the top 10: 1. Set Number 2. Alignment 3. Leader Aspect color 4. Alphabetical
@@ -645,27 +538,12 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
         top_20_popularity = leader_stats_full.sort_values("TotalGames", ascending=False).head(20)
         top_20_names = top_20_popularity["LeaderNorm"].tolist()
         
-        # We'll take the top 19 to make room for 'Other'
+        # Use the top 19 leaders to make room for 'Other'
         top_19_names = top_20_names[:19]
         
-        # Sort these 19 using the requested hierarchy
-        def get_leader_sort_info_full(name):
-            data = get_leader_data(name)
-            l_set = data.get("set", "Unknown")
-            l_aspects = data.get("aspects", [])
-            set_rank = SET_ORDER.get(l_set, 99)
-            
-            alignment_priority = {"Heroism": 0, "Villainy": 1}
-            alignments = [alignment_priority[a] for a in l_aspects if a in alignment_priority]
-            alignment_rank = min(alignments) if alignments else 2
-            
-            aspect_priority = {"Cunning": 0, "Aggression": 1, "Command": 2, "Vigilance": 3}
-            primaries = [aspect_priority[a] for a in l_aspects if a in aspect_priority]
-            aspect_rank = min(primaries) if primaries else 4
-            return pd.Series([set_rank, alignment_rank, aspect_rank])
-
+        # Sort these 19 using the established hierarchy
         top_19_df = leader_stats_full[leader_stats_full["LeaderNorm"].isin(top_19_names)].copy()
-        top_19_df[["SetRank", "AlignmentRank", "AspectRank"]] = top_19_df["LeaderNorm"].apply(get_leader_sort_info_full)
+        top_19_df[["SetRank", "AlignmentRank", "AspectRank"]] = top_19_df["LeaderNorm"].apply(get_leader_sort_info)
         leader_stats_sorted = top_19_df.sort_values(["SetRank", "AlignmentRank", "AspectRank", "LeaderNorm"])
         
         leader_stats = leader_stats_sorted.copy()
@@ -685,23 +563,8 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
         other_row["WinRate"] = (other_row["Wins"] / other_row["TotalGames"].apply(lambda x: max(x, 1))) * 100
         leader_stats = pd.concat([leader_stats, other_row], ignore_index=True)
     else:
-        # Sort all available leaders using the requested hierarchy
-        def get_leader_sort_info_small(name):
-            data = get_leader_data(name)
-            l_set = data.get("set", "Unknown")
-            l_aspects = data.get("aspects", [])
-            set_rank = SET_ORDER.get(l_set, 99)
-            
-            alignment_priority = {"Heroism": 0, "Villainy": 1}
-            alignments = [alignment_priority[a] for a in l_aspects if a in alignment_priority]
-            alignment_rank = min(alignments) if alignments else 2
-            
-            aspect_priority = {"Cunning": 0, "Aggression": 1, "Command": 2, "Vigilance": 3}
-            primaries = [aspect_priority[a] for a in l_aspects if a in aspect_priority]
-            aspect_rank = min(primaries) if primaries else 4
-            return pd.Series([set_rank, alignment_rank, aspect_rank])
-
-        leader_stats_full[["SetRank", "AlignmentRank", "AspectRank"]] = leader_stats_full["LeaderNorm"].apply(get_leader_sort_info_small)
+        # Sort all available leaders using the established hierarchy
+        leader_stats_full[["SetRank", "AlignmentRank", "AspectRank"]] = leader_stats_full["LeaderNorm"].apply(get_leader_sort_info)
         leader_stats = leader_stats_full.sort_values(["SetRank", "AlignmentRank", "AspectRank", "LeaderNorm"])
         top_leaders = leader_stats["LeaderNorm"].tolist()
     
@@ -886,7 +749,7 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
 
     # 4. Scatter Plot (Replacing Bubble Chart)
     fig, ax = plt.subplots(figsize=(16, 12)) # Slightly larger figure
-    # For scatter plot, we'll use the top 30 most played leaders to avoid overcrowding.
+    # For scatter plot, use the top 30 most played leaders to avoid overcrowding.
     # When truncating, add an 'Other' category
     if len(leader_stats_full) > 30:
         bubble_stats_sorted = leader_stats_full.sort_values("TotalGames", ascending=False)
@@ -951,12 +814,7 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
     plt.savefig(os.path.join(output_dir, "popularity_vs_winrate.png"), dpi=300)
     plt.close()
 
-# --- MAIN EXECUTION ---
-# filename_stem is determined during data processing
-full_plots_dir = os.path.join("plots", filename_stem, "full_report")
-meta_plots_dir = os.path.join("plots", filename_stem, "meta_report")
-
-# Meta leaders persistence
+# --- PERSISTENCE AND DATA PROCESSING HELPERS ---
 META_FILE = "meta_leaders.json"
 DEFAULT_META_LEADERS = [
     "Darth Vader", "Luke Skywalker", "Boba Fett", "Sabine Wren", 
@@ -979,27 +837,21 @@ def save_meta_leaders(leaders):
     except Exception as e:
         print(f"Error saving {META_FILE}: {e}")
 
-meta_list = load_meta_leaders()
-
-# Finalize data
 def combine_deck_aspects(row):
     leader_aspects = row["LeaderAspects"]
     base_aspect = row["BaseAspect"]
     leader_norm = row["LeaderNorm"]
     
     if not isinstance(leader_aspects, list):
-        # Fallback for leaders not in lookup
         found_data = get_leader_data(leader_norm)
         if found_data:
             leader_aspects = found_data.get("aspects")
     
     if not isinstance(leader_aspects, list):
-        # Even if leader aspects are unknown, we might have base aspect
         if base_aspect and pd.notna(base_aspect):
             return str(base_aspect)
         return "Unknown"
     
-    # Ensure all elements are strings to avoid TypeError in sorted()
     combined = [str(a) for a in leader_aspects if a is not None]
     if base_aspect and pd.notna(base_aspect):
         combined.append(str(base_aspect))
@@ -1007,18 +859,15 @@ def combine_deck_aspects(row):
     return format_aspects(combined)
 
 def get_hatch_robust(row):
-    # Try to get from LeaderAspects first
     aspects = None
     if "LeaderAspects" in row:
         aspects = row["LeaderAspects"]
     elif "LeaderAspectsStr" in row and isinstance(row["LeaderAspectsStr"], str):
-        # Fallback to splitting LeaderAspectsStr if it exists
         aspects = [a.strip() for a in row["LeaderAspectsStr"].split(",") if a.strip()]
         
     if isinstance(aspects, list) and aspects:
         return get_hatch(aspects)
     
-    # Try finding aspects via robust lookup
     leader_norm = None
     if "LeaderNorm" in row:
         leader_norm = row["LeaderNorm"]
@@ -1031,18 +880,15 @@ def get_hatch_robust(row):
     return ""
 
 def get_hatch_color_robust(row):
-    # Try to get from LeaderAspects first
     aspects = None
     if "LeaderAspects" in row:
         aspects = row["LeaderAspects"]
     elif "LeaderAspectsStr" in row and isinstance(row["LeaderAspectsStr"], str):
-        # Fallback to splitting LeaderAspectsStr if it exists
         aspects = [a.strip() for a in row["LeaderAspectsStr"].split(",") if a.strip()]
         
     if isinstance(aspects, list) and aspects:
         return get_alignment_color(aspects)
     
-    # Try finding aspects via robust lookup
     leader_norm = None
     if "LeaderNorm" in row:
         leader_norm = row["LeaderNorm"]
@@ -1054,60 +900,177 @@ def get_hatch_color_robust(row):
             
     return SW_COLORS["Neutral"]
 
-df["LeaderAspectsStr"] = df["LeaderAspects"].apply(lambda x: format_aspects(x) if isinstance(x, list) else "Unknown")
-df["DeckAspects"] = df.apply(combine_deck_aspects, axis=1)
+def load_card_data():
+    cards_file = "all_cards.json" if os.path.exists("all_cards.json") else "cards.json"
+    if not os.path.exists(cards_file):
+        print(f"Error: Card metadata file {cards_file} not found.")
+        return []
 
-# 1. Process Full Dataset
-print("Generating full report...")
-generate_plots(df, full_plots_dir, prefix="Full Dataset: ", filename_stem=filename_stem)
-print(f"Full report generated in {full_plots_dir}")
+    with open(cards_file, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-# 2. Meta Selection
-available_leaders = df["LeaderNorm"].unique().tolist()
-print(f"Found {len(available_leaders)} available leaders.")
-print("Opening leader meta selection dialog...")
-root.deiconify() # Briefly show root if it's hidden to ensure children work correctly
-root.title("SWU Deck Stats")
-root.geometry("1x1+0+0") # Make it tiny and out of the way
-root.attributes("-topmost", True)
-root.update()
-    
-# Check if there are actually leaders to select
-if not available_leaders:
-    print("Warning: No leaders found in data to select.")
-    selected_leaders = []
-else:
-    selected_leaders = multi_select_listbox("Leader Meta Analysis", 
-                                          "Select leaders to include in the meta analysis.\nOnly these leaders will be used for the 'Meta' plots.", 
-                                          available_leaders,
-                                          initial_selections=meta_list)
-root.withdraw()
+def build_lookups(cards):
+    l_lookup = {}
+    b_lookup = {}
+    for card in cards:
+        name = card.get("Name")
+        subtitle = card.get("Subtitle")
+        card_type = card.get("Type")
+        if card_type == "Leader":
+            aspects = card.get("Aspects", [])
+            entry = {
+                "aspects": sorted(aspects), 
+                "subtitle": subtitle,
+                "set": card.get("Set"),
+                "number": card.get("Number")
+            }
+            if subtitle:
+                l_lookup[f"{name} | {subtitle}".lower()] = entry
+                l_lookup[strip_accents(f"{name} | {subtitle}".lower())] = entry
+            if name.lower() not in l_lookup:
+                l_lookup[name.lower()] = entry
+            name_stripped = strip_accents(name.lower())
+            if name_stripped not in l_lookup:
+                l_lookup[name_stripped] = entry
+        elif card_type == "Base":
+            aspects = card.get("Aspects", [])
+            b_lookup[name] = {
+                "aspect": aspects[0] if aspects else None,
+                "hp": card.get("HP", None)
+            }
+    return l_lookup, b_lookup
 
-if selected_leaders:
-    # Update the persistent meta list: 
-    # add new selections, and remove only those currently available that were deselected
-    new_meta_set = set(meta_list)
-    available_set = set(available_leaders)
-    
-    # Selected ones should definitely be in meta
-    for sl in selected_leaders:
-        new_meta_set.add(sl)
-    
-    # Available but NOT selected should be removed from meta
-    for al in available_leaders:
-        if al not in selected_leaders and al in new_meta_set:
-            new_meta_set.remove(al)
-            
-    save_meta_leaders(sorted(list(new_meta_set)))
-    
-    print(f"Generating meta report for {len(selected_leaders)} leaders: {selected_leaders}")
-    meta_df = df[df["LeaderNorm"].isin(selected_leaders)]
-    generate_plots(meta_df, meta_plots_dir, prefix="Meta: ", filename_stem=filename_stem, highlighted=selected_leaders)
-    print(f"Meta report generated in {meta_plots_dir}")
-    messagebox.showinfo("Success", f"Reports generated!\n\nFull report: {full_plots_dir}\nMeta report: {meta_plots_dir}")
-else:
-    print("No leaders selected for meta. Skipping meta analysis.")
-    messagebox.showinfo("Success", f"Full report generated in:\n{full_plots_dir}")
+def process_match_data(selected_files, l_lookup, b_lookup):
+    dataframes = []
+    for file_path in selected_files:
+        try:
+            temp_df = pd.read_csv(file_path)
+            dataframes.append(temp_df)
+        except Exception as e:
+            print(f"Error loading {file_path}: {e}")
 
-print("Processing complete.")
-root.destroy()
+    if not dataframes:
+        return None
+
+    df = pd.concat(dataframes, ignore_index=True)
+    df["LeaderNorm"] = df["OpponentLeader"].apply(normalize_leader)
+    df["BaseNorm"] = df["OpponentBase"].apply(normalize_base)
+
+    df["LeaderAspects"] = df["LeaderNorm"].apply(lambda x: get_leader_data(x).get("aspects"))
+    df["LeaderSubtitle"] = df["LeaderNorm"].apply(lambda x: get_leader_data(x).get("subtitle"))
+    df["LeaderSet"] = df["LeaderNorm"].apply(lambda x: get_leader_data(x).get("set"))
+    df["LeaderNumber"] = df["LeaderNorm"].apply(lambda x: get_leader_data(x).get("number"))
+
+    def get_base_aspect_local(name):
+        aspect = b_lookup.get(name, {}).get("aspect")
+        if aspect: return aspect
+        name_lower = name.lower()
+        if "aggression" in name_lower: return "Aggression"
+        if "cunning" in name_lower: return "Cunning"
+        if "vigilance" in name_lower: return "Vigilance"
+        if "command" in name_lower: return "Command"
+        return None
+
+    df["BaseAspect"] = df["BaseNorm"].apply(get_base_aspect_local)
+    df["BaseHP"] = df["BaseNorm"].apply(lambda x: b_lookup.get(x, {}).get("hp"))
+    df["Wins"] = pd.to_numeric(df["Wins"], errors='coerce').fillna(0)
+    df["Losses"] = pd.to_numeric(df["Losses"], errors='coerce').fillna(0)
+    
+    df["LeaderAspectsStr"] = df["LeaderAspects"].apply(lambda x: format_aspects(x) if isinstance(x, list) else "Unknown")
+    df["DeckAspects"] = df.apply(combine_deck_aspects, axis=1)
+    
+    return df
+
+# --- MAIN EXECUTION ---
+def main():
+    global leader_lookup, base_lookup
+    # --- DATA PROCESSING ---
+    selected_files = filedialog.askopenfilenames(
+        title="Select one or more CSV files you want to process and aggregate",
+        filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        initialdir="."
+    )
+    root.attributes("-topmost", False)
+
+    if not selected_files:
+        print("No files selected. Exiting.")
+        return
+
+    # Load card metadata
+    cards = load_card_data()
+    if not cards:
+        return
+
+    leader_lookup, base_lookup = build_lookups(cards)
+
+    # Determine output directory name based on selected files
+    if len(selected_files) == 1:
+        filename_stem = Path(selected_files[0]).stem
+    else:
+        filename_stem = f"Aggregated_{len(selected_files)}_files_{Path(selected_files[0]).stem}"
+
+    # Load and process match results
+    df = process_match_data(selected_files, leader_lookup, base_lookup)
+    if df is None:
+        print("No valid data found in selected files. Exiting.")
+        return
+
+    full_plots_dir = os.path.join("plots", filename_stem, "full_report")
+    meta_plots_dir = os.path.join("plots", filename_stem, "meta_report")
+
+    meta_list = load_meta_leaders()
+
+    # 1. Process Full Dataset
+    print("Generating full report...")
+    generate_plots(df, full_plots_dir, prefix="Full Dataset: ", filename_stem=filename_stem)
+    print(f"Full report generated in {full_plots_dir}")
+
+    # 2. Meta Selection
+    available_leaders = df["LeaderNorm"].unique().tolist()
+    print(f"Found {len(available_leaders)} available leaders.")
+    print("Opening leader meta selection dialog...")
+    root.deiconify() # Briefly show root if it's hidden to ensure children work correctly
+    root.title("SWU Deck Stats")
+    root.geometry("1x1+0+0") # Make it tiny and out of the way
+    root.attributes("-topmost", True)
+    root.update()
+        
+    # Check if there are actually leaders to select
+    if not available_leaders:
+        print("Warning: No leaders found in data to select.")
+        selected_leaders = []
+    else:
+        selected_leaders = multi_select_listbox("Leader Meta Analysis", 
+                                              "Select leaders to include in the meta analysis.\nOnly these leaders will be used for the 'Meta' plots.", 
+                                              available_leaders,
+                                              initial_selections=meta_list)
+    root.withdraw()
+
+    if selected_leaders:
+        # Update the persistent meta list
+        new_meta_set = set(meta_list)
+        available_set = set(available_leaders)
+        for sl in selected_leaders:
+            new_meta_set.add(sl)
+        for al in available_leaders:
+            if al not in selected_leaders and al in new_meta_set:
+                new_meta_set.remove(al)
+                
+        save_meta_leaders(sorted(list(new_meta_set)))
+        
+        print(f"Generating meta report for {len(selected_leaders)} leaders: {selected_leaders}")
+        meta_df = df[df["LeaderNorm"].isin(selected_leaders)]
+        generate_plots(meta_df, meta_plots_dir, prefix="Meta: ", filename_stem=filename_stem, highlighted=selected_leaders)
+        print(f"Meta report generated in {meta_plots_dir}")
+        messagebox.showinfo("Success", f"Reports generated!\n\nFull report: {full_plots_dir}\nMeta report: {meta_plots_dir}")
+    else:
+        print("No leaders selected for meta. Skipping meta analysis.")
+        messagebox.showinfo("Success", f"Full report generated in:\n{full_plots_dir}")
+
+    print("Processing complete.")
+    root.destroy()
+
+if __name__ == "__main__":
+    main()
+
+# --- PLOTTING FUNCTIONS ---
