@@ -9,6 +9,8 @@ from pathlib import Path
 import os
 
 import unicodedata
+from matplotlib.patches import Wedge
+from matplotlib.offsetbox import AnnotationBbox, DrawingArea
 
 # --- GLOBAL LOOKUPS ---
 leader_lookup = {}
@@ -751,32 +753,62 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
     fig, ax = plt.subplots(figsize=(16, 12)) # Slightly larger figure
     # For scatter plot, use the top 30 most played leaders to avoid overcrowding.
     # When truncating, add an 'Other' category
+    other_info_text = ""
     if len(leader_stats_full) > 30:
         bubble_stats_sorted = leader_stats_full.sort_values("TotalGames", ascending=False)
         bubble_stats = bubble_stats_sorted.head(29).copy()
         other_data = bubble_stats_sorted.iloc[29:]
         
-        other_row = pd.DataFrame({
-            "LeaderNorm": ["Other"],
-            "Wins": [other_data["Wins"].sum()],
-            "Losses": [other_data["Losses"].sum()],
-            "TotalGames": [other_data["TotalGames"].sum()]
-        })
-        other_row["WinRate"] = (other_row["Wins"] / other_row["TotalGames"].apply(lambda x: max(x, 1))) * 100
-        bubble_stats = pd.concat([bubble_stats, other_row], ignore_index=True)
+        other_wins = other_data["Wins"].sum()
+        other_losses = other_data["Losses"].sum()
+        other_games = other_data["TotalGames"].sum()
+        other_wr = (other_wins / max(other_games, 1)) * 100
+        
+        other_info_text = (f"Other Leaders Combined:\n"
+                           f"Count: {len(other_data)}\n"
+                           f"Games: {other_games}\n"
+                           f"Win Rate: {other_wr:.1f}%")
     else:
         bubble_stats = leader_stats_full.sort_values("TotalGames", ascending=False)
     
-    # Ensure points are visible even at 0% win rate
-    # Use a color map from Red to Green based on WinRate
-    sc = ax.scatter(bubble_stats["TotalGames"], bubble_stats["WinRate"], 
-                        c=bubble_stats["WinRate"], cmap="RdYlGn", alpha=0.9, 
-                        edgecolor=SW_COLORS["Text"], s=150) # Larger points
-    
-    # Add a colorbar to show the win rate scale
-    cbar = fig.colorbar(sc)
-    cbar.set_label("Win Rate (%)", color=SW_COLORS["Text"])
-    cbar.ax.yaxis.set_tick_params(color=SW_COLORS["Text"], labelcolor=SW_COLORS["Text"])
+    # Prepare base-aspect composition per leader for pie slices
+    base_counts = data.groupby(["LeaderNorm", "BaseAspect"]).size().unstack(fill_value=0)
+
+    def draw_pie(ax_local, center_xy, ratios_dict, size_px=28):
+        # Ensure consistent order for base aspects
+        order = ["Cunning", "Aggression", "Command", "Vigilance"]
+        vals = [float(ratios_dict.get(k, 0.0)) for k in order]
+        total = sum(vals) if sum(vals) > 0 else 1.0
+        fracs = [v / total for v in vals]
+        colors = [SW_COLORS.get(k, SW_COLORS["Neutral"]) for k in order]
+
+        da = DrawingArea(size_px, size_px, 0, 0)
+        theta1 = 0.0
+        cx = cy = size_px / 2.0
+        r = size_px / 2.0
+        for frac, col in zip(fracs, colors):
+            theta2 = theta1 + 360.0 * frac
+            if frac > 0:
+                w = Wedge((cx, cy), r, theta1, theta2, facecolor=col, edgecolor=SW_COLORS["Text"], linewidth=0.6)
+                da.add_artist(w)
+            theta1 = theta2
+        ab = AnnotationBbox(da, center_xy, frameon=False, box_alignment=(0.5, 0.5))
+        ax_local.add_artist(ab)
+
+    # Draw a pie at each data point representing base aspect mix; remove redundant winrate colormap
+    for _, row in bubble_stats.iterrows():
+        leader = row["LeaderNorm"]
+        x, y = row["TotalGames"], row["WinRate"]
+        ratios = {}
+        if leader in base_counts.index:
+            counts = base_counts.loc[leader]
+            total = counts.sum()
+            if total > 0:
+                ratios = {k: counts.get(k, 0) for k in counts.index}
+        # Fallback to neutral if no data
+        if not ratios:
+            ratios = {"Neutral": 1.0}
+        draw_pie(ax, (x, y), ratios, size_px=28)
     
     ax.set_title(f"Leader Popularity vs Win Rate (%)\n{title_header}")
     ax.set_ylabel("Win Rate (%)")
@@ -795,20 +827,27 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
         text_color = get_aspect_color(l_aspects, use_text_colors=True)
 
         # Offset labels to ensure they don't overlap with the point
-        # Use a smaller rotation and adjust xytext to keep labels within bounds
+        # Increased xytext offset to avoid overlap with the pie chart
         ax.annotate(label, (row["TotalGames"], row["WinRate"]), 
-                     xytext=(8, 8), textcoords='offset points', fontsize=10, fontweight='bold',
+                     xytext=(14, 14), textcoords='offset points', fontsize=10, fontweight='bold',
                      rotation=10, color=text_color)
     
+    if other_info_text:
+        # Add 'Other' info box to the right
+        ax.text(1.02, 0.5, other_info_text, transform=ax.transAxes, 
+                fontsize=11, fontweight='bold', color=SW_COLORS["Text"],
+                bbox=dict(facecolor=SW_COLORS["Background"], edgecolor=SW_COLORS["Grid"], alpha=0.8),
+                verticalalignment='center')
+
     ax.axhline(50, color=SW_COLORS["Grid"], linestyle='--', alpha=0.5)
     ax.axhline(60, color=SW_COLORS["WinRateHigh"], linestyle='--', alpha=0.5)
     ax.axhline(40, color=SW_COLORS["WinRateLow"], linestyle='--', alpha=0.5)
     ax.set_ylim(-10, 115) # Increased margins to prevent label clipping at 0% and 100%
     max_games = bubble_stats["TotalGames"].max()
-    ax.set_xlim(-max_games * 0.05, max_games * 1.25) # Increased padding for labels on the right
+    ax.set_xlim(-max_games * 0.05, max_games * 1.15) # Adjusted padding for labels now that Other is gone
     ax.grid(True, linestyle=':', alpha=0.3)
-    # plt.legend removed as it's now redundant with colorbar and labels
-    plt.tight_layout(rect=[0, 0.03, 1, 1])
+    # plt.legend removed as pies convey base-aspect composition and labels identify leaders
+    plt.tight_layout(rect=[0, 0.03, 0.9, 1]) # Make room on the right for the text box
     # Add Star Wars property disclaimer at the bottom
     fig.text(0.5, 0.01, DISCLAIMER_TEXT, ha='center', fontsize=8, color=SW_COLORS["Text"], alpha=0.7)
     plt.savefig(os.path.join(output_dir, "popularity_vs_winrate.png"), dpi=300)
