@@ -1,3 +1,4 @@
+import sys
 import pandas as pd
 import json
 import seaborn as sns
@@ -15,6 +16,16 @@ from matplotlib.offsetbox import AnnotationBbox, DrawingArea
 # --- GLOBAL LOOKUPS ---
 leader_lookup = {}
 base_lookup = {}
+
+def get_resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 def strip_accents(s):
     return ''.join(c for c in unicodedata.normalize('NFD', s)
@@ -774,6 +785,17 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
     # Prepare base-aspect composition per leader for pie slices
     base_counts = data.groupby(["LeaderNorm", "BaseAspect"]).size().unstack(fill_value=0)
 
+    # Calculate overall deck statistics
+    total_wins = leader_stats_full["Wins"].sum()
+    total_losses = leader_stats_full["Losses"].sum()
+    total_games = leader_stats_full["TotalGames"].sum()
+    overall_wr = (total_wins / max(total_games, 1)) * 100
+    
+    overall_stats_text = (f"Overall Deck Statistics:\n"
+                          f"Games: {total_games}\n"
+                          f"Wins: {total_wins}  Losses: {total_losses}\n"
+                          f"Win Rate: {overall_wr:.1f}%")
+
     def draw_pie(ax_local, center_xy, ratios_dict, size_px=28):
         # Ensure consistent order for base aspects
         order = ["Cunning", "Aggression", "Command", "Vigilance"]
@@ -832,9 +854,15 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
                      xytext=(14, 14), textcoords='offset points', fontsize=10, fontweight='bold',
                      rotation=10, color=text_color)
     
+    # Combine sections if both exist
     if other_info_text:
-        # Add 'Other' info box to the right
-        ax.text(1.02, 0.5, other_info_text, transform=ax.transAxes, 
+        info_box_text = overall_stats_text + "\n\n" + other_info_text
+    else:
+        info_box_text = overall_stats_text
+
+    if info_box_text:
+        # Add info box to the right
+        ax.text(1.02, 0.5, info_box_text, transform=ax.transAxes, 
                 fontsize=11, fontweight='bold', color=SW_COLORS["Text"],
                 bbox=dict(facecolor=SW_COLORS["Background"], edgecolor=SW_COLORS["Grid"], alpha=0.8),
                 verticalalignment='center')
@@ -844,7 +872,7 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
     ax.axhline(40, color=SW_COLORS["WinRateLow"], linestyle='--', alpha=0.5)
     ax.set_ylim(-10, 115) # Increased margins to prevent label clipping at 0% and 100%
     max_games = bubble_stats["TotalGames"].max()
-    ax.set_xlim(-max_games * 0.05, max_games * 1.15) # Adjusted padding for labels now that Other is gone
+    ax.set_xlim(-max_games * 0.05, max_games * 1.25) # Further increased padding for labels on the right
     ax.grid(True, linestyle=':', alpha=0.3)
     # plt.legend removed as pies convey base-aspect composition and labels identify leaders
     plt.tight_layout(rect=[0, 0.03, 0.9, 1]) # Make room on the right for the text box
@@ -940,7 +968,11 @@ def get_hatch_color_robust(row):
     return SW_COLORS["Neutral"]
 
 def load_card_data():
-    cards_file = "all_cards.json" if os.path.exists("all_cards.json") else "cards.json"
+    cards_file = get_resource_path("all_cards.json")
+    if not os.path.exists(cards_file):
+        # Fallback to current directory for dev
+        cards_file = "all_cards.json"
+    
     if not os.path.exists(cards_file):
         print(f"Error: Card metadata file {cards_file} not found.")
         return []
