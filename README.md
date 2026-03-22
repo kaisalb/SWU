@@ -48,6 +48,10 @@ For users who do not have Python installed, a pre-compiled standalone executable
 2. Run `SWU_Deck_Stats.exe`.
 3. Follow the same steps as the Python scripts for file selection and meta report generation.
 
+#### Note on Windows Defender SmartScreen
+Since this is a hobbyist tool and is not digitally signed, Windows may display a **"Windows protected your PC"** message when you first run the `.exe`. 
+- To run anyway: Click **"More info"** then click **"Run anyway"**.
+
 ## Requirements
 
 ### Full Version (`kabastCSVprocessing.py`)
