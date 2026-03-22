@@ -1,7 +1,14 @@
+"""
+SWU Deck Stats (Full Version)
+A comprehensive tool for analyzing and visualizing match data from Star Wars Unlimited.
+Requires: pandas, matplotlib, seaborn, tkinter.
+"""
 import sys
 import pandas as pd
 import json
-import seaborn as sns
+# import seaborn as sns
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -736,8 +743,30 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
         
         fig, ax = plt.subplots(figsize=(12, 10))
         # Use a single-color sequential colormap for popularity (e.g., "Blues" or "YlGnBu")
-        sns.heatmap(pivot, annot=True, cmap="YlGnBu", vmin=0, fmt=".1f", linewidths=.5,
-                    cbar_kws={'label': 'Percentage of Total Games (%)'}, ax=ax)
+        # sns.heatmap(pivot, annot=True, cmap="YlGnBu", vmin=0, fmt=".1f", linewidths=.5,
+        #            cbar_kws={'label': 'Percentage of Total Games (%)'}, ax=ax)
+        
+        # Simple manual heatmap using matplotlib's pcolormesh or imshow
+        im = ax.imshow(pivot, cmap="YlGnBu", vmin=0)
+        
+        # Add colorbar
+        fig.colorbar(im, ax=ax, label='Percentage of Total Games (%)')
+
+        # Add text annotations
+        for i in range(len(pivot.index)):
+            for j in range(len(pivot.columns)):
+                val = pivot.iloc[i, j]
+                text_col = "white" if val > pivot.max().max() / 2 else "black"
+                ax.text(j, i, f"{val:.1f}", ha="center", va="center", color=text_col)
+
+        # Set labels
+        ax.set_xticks(range(len(pivot.columns)))
+        ax.set_xticklabels(pivot.columns)
+        ax.set_yticks(range(len(pivot.index)))
+        ax.set_yticklabels(pivot.index)
+        
+        ax.set_xlabel("Base Aspect")
+        ax.set_ylabel("Leader Aspects")
         
         # --- COLORING AXIS LABELS ---
         # Color the aspect labels on the Y-axis
@@ -968,10 +997,17 @@ def get_hatch_color_robust(row):
     return SW_COLORS["Neutral"]
 
 def load_card_data():
-    cards_file = get_resource_path("all_cards.json")
+    # Try minified version first
+    cards_file = get_resource_path("all_cards_min.json")
+    if not os.path.exists(cards_file):
+        cards_file = get_resource_path("all_cards.json")
+    
     if not os.path.exists(cards_file):
         # Fallback to current directory for dev
-        cards_file = "all_cards.json"
+        if os.path.exists("all_cards_min.json"):
+            cards_file = "all_cards_min.json"
+        else:
+            cards_file = "all_cards.json"
     
     if not os.path.exists(cards_file):
         print(f"Error: Card metadata file {cards_file} not found.")
