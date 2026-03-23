@@ -41,23 +41,40 @@ def safe_float(v):
 def get_leader_data(name):
     if not name:
         return {}
+    
     name_lower = name.lower()
+    # Try direct lookup
     data = leader_lookup.get(name_lower)
-    if data: return data
+    if data:
+        return data
+    
+    # Try name without accents
     name_stripped = strip_accents(name_lower)
     data = leader_lookup.get(name_stripped)
-    if data: return data
+    if data:
+        return data
+    
+    # Fallback for "Name | Subtitle" failure
     if " | " in name_lower:
         base_name = name_lower.split(" | ")[0].strip()
         data = leader_lookup.get(base_name)
-        if data: return data
+        if data:
+            return data
+        
+        # Try base name without accents
         base_name_stripped = strip_accents(base_name)
         data = leader_lookup.get(base_name_stripped)
-        if data: return data
+        if data:
+            return data
+    
+    # Very loose fallback for common typos/variations (e.g. "Vel Sarhta" -> "Vel Sartha")
+    # Only if name is relatively short and we find a close match
     for k in leader_lookup:
         if len(k) > 5 and len(name_lower) > 5:
+            # Check if one is a substring of the other or they are very similar
             if k in name_lower or name_lower in k:
                 return leader_lookup[k]
+            
     return {}
 
 SET_ORDER = {"SOR": 0, "SHD": 1, "TWI": 2, "JTL": 3, "LOF": 4, "SEC": 5, "LAW": 6, "PRM": 7}
@@ -85,7 +102,7 @@ def get_leader_sort_info(name):
     alignment_priority = {"Heroism": 0, "Villainy": 1}
     alignments = [alignment_priority[a] for a in l_aspects if a in alignment_priority]
     alignment_rank = min(alignments) if alignments else 2
-    aspect_priority = {"Vigilance": 0, "Command": 1, "Aggression": 2, "Cunning": 3}
+    aspect_priority = {"Cunning": 0, "Aggression": 1, "Command": 2, "Vigilance": 3}
     primaries = [aspect_priority[a] for a in l_aspects if a in aspect_priority]
     aspect_rank = min(primaries) if primaries else 4
     return (set_rank, alignment_rank, aspect_rank)
@@ -114,6 +131,7 @@ def get_alignment_color(aspects):
     elif "Villainy" in aspect_list: return SW_COLORS["Villainy"]
     else: return SW_COLORS["Neutral"]
 
+# Set aesthetic parameters
 plt.rcParams.update({
     'figure.facecolor': SW_COLORS["Background"], 'axes.facecolor': SW_COLORS["Background"],
     'axes.edgecolor': SW_COLORS["Text"], 'axes.labelcolor': SW_COLORS["Text"],
@@ -251,7 +269,20 @@ def get_stats_local(data_rows, group_cols):
 
 def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=None):
     if highlighted is None: highlighted = []
-    os.makedirs(output_dir, exist_ok=True)
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+    except PermissionError as e:
+        # Fallback to current working directory if absolute path fails
+        alt_dir = os.path.join("plots", os.path.basename(os.path.dirname(output_dir)), os.path.basename(output_dir))
+        print(f"WARNING: Permission denied for {output_dir}. Trying fallback: {alt_dir}")
+        try:
+            os.makedirs(alt_dir, exist_ok=True)
+            output_dir = alt_dir
+        except:
+            print(f"CRITICAL ERROR: Could not create output directory: {e}")
+            messagebox.showerror("Error", f"Could not create output directory:\n{output_dir}\n\nPlease check folder permissions.")
+            return
+
     title_filter = "Full Data" if "Full Dataset" in prefix else "Meta Filter"
     title_header = f"{filename_stem} ({title_filter})"
 
@@ -283,6 +314,7 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
     ax.axhline(40, color=SW_COLORS["WinRateLow"], linestyle='--', alpha=0.5)
     leg = ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', title="Aspects")
     for text_obj in leg.get_texts():
+        text_obj.set_color(SW_COLORS["Text"])
         text = text_obj.get_text()
         aspect_list = [a.strip() for a in text.split(',')]
         text_obj.set_color(get_aspect_color(aspect_list, use_text_colors=True))
@@ -500,6 +532,9 @@ def generate_plots(data, output_dir, prefix="", filename_stem="", highlighted=No
     max_g = max([r["TotalGames"] for r in leader_stats_full]) if leader_stats_full else 100
     ax.set_xlim(-max_g*0.05, max_g*1.25)
     ax.grid(True, linestyle=':', alpha=0.3)
+    ax.axhline(50, color=SW_COLORS["Grid"], linestyle='--', alpha=0.5)
+    ax.axhline(60, color=SW_COLORS["WinRateHigh"], linestyle='--', alpha=0.5)
+    ax.axhline(40, color=SW_COLORS["WinRateLow"], linestyle='--', alpha=0.5)
     plt.tight_layout(rect=[0, 0.03, 0.9, 1])
     fig.text(0.5, 0.01, DISCLAIMER_TEXT, ha='center', fontsize=8, color=SW_COLORS["Text"], alpha=0.7)
     plt.savefig(os.path.join(output_dir, "popularity_vs_winrate.png"), dpi=300)
@@ -594,7 +629,12 @@ def main():
     all_leaders = sorted(list(set(r["LeaderNorm"] for r in df)))
     print(f"DEBUG: Found {len(all_leaders)} unique leaders in dataset.")
     
-    full_dir, meta_dir = os.path.join("plots", stem, "full_report"), os.path.join("plots", stem, "meta_report")
+    # Use absolute paths for directories to avoid PermissionError in some environments
+    base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+    plots_root = os.path.join(base_dir, "plots")
+    
+    full_dir = os.path.join(plots_root, stem, "full_report")
+    meta_dir = os.path.join(plots_root, stem, "meta_report")
     meta_list = load_meta_leaders()
     print(f"DEBUG: Loaded {len(meta_list)} meta leaders from persistence.")
     
